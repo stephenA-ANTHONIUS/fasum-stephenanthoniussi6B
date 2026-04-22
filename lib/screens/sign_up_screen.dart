@@ -1,3 +1,6 @@
+import 'package:fasum_stephen/screens/home_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 class SignUpScreen extends StatefulWidget {
@@ -19,18 +22,67 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _isConfirmPasswordVisible = false;
 
   void _signUp() async {
-
-  }
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    setState(() => _isLoading = true);
+    try {
+      final userCredential = await
+      FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      await
+      FirebaseFirestore.instance.collection('users').doc(userCredential.user!.uid).set({
+        'fullName': _fullNameController.text.trim(),
+        'email': email,
+        'createdAt': DateTime.now(),
+      });
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+        (route) => false, // Hapus Semua route sebelumnya        
+      );
+    } on FirebaseAuthException catch (error) {
+      _showErrorMessage(_getAuthErrorMessage(error.code));
+    } catch (error) {
+      _showErrorMessage('An error occurred : $error');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }  
   
   void _showErrorMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+      SnackBar(content: Text(message)));
   }
 
   bool _isValidEmail(String email) {
-    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-    return emailRegex.hasMatch(email);
+    String emailRegex = r"^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$";
+    return RegExp(emailRegex).hasMatch(email);
+  }
+  String _getAuthErrorMessage(String code) {
+    switch (code) {
+      case 'weak-password':
+        return 'The password is too weak.';
+      case 'email-already-in-use':
+        return 'The account already exists for that email.';
+      case 'invalid-email':
+        return 'The email address is not valid.';
+      default:
+        return 'An error occurred. Please try again.';
+    }
+  }
+
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
   }
 
   @override
@@ -91,7 +143,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           : Icons.visibility_off,
                         ),
                         onPressed: () {
-                                                    
+                          setState(() {
+                            _isPasswordVisible = !_isPasswordVisible;
+                          });                                                    
                         },
                       ),
                     ),
@@ -120,7 +174,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           : Icons.visibility_off,
                         ),
                         onPressed: () {
-                                                    
+                          setState(() {
+                            _isConfirmPasswordVisible = !_isConfirmPasswordVisible;
+                          });
                         },
                       ),
                     ),
@@ -136,7 +192,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     },
                   ),
                   const SizedBox(height: 16.0,),
-                  TextFormField(),
                   _isLoading ? const CircularProgressIndicator() :
                   ElevatedButton(
                     onPressed: _signUp,
