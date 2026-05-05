@@ -3,9 +3,12 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class AddPostScreen extends StatefulWidget {
   const AddPostScreen({super.key});
@@ -177,12 +180,164 @@ class _AddPostScreenState extends State<AddPostScreen> {
     }
   }
 
-  Future<void> _getLocation() async {}
+  Future<void> _getLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Location services are disabled"))
+        );
+        return;
+      }
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.deniedForever || permission == LocationPermission.denied) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Location permission are denied")),
+          );
+          return;
+        }
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings:  const LocationSettings(
+          accuracy: LocationAccuracy.high
+        ),
+      ).timeout(const Duration(seconds: 10));
+      setState(() {
+        _latitude = position.latitude;
+        _longitude = position.longitude;
+      });
+    } catch (e) {
+      debugPrint("Failed to retrieve location: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Failed to retrieve location: $e")),
+      );
+      setState(() {
+        _latitude = null;
+        _longitude = null;        
+      });
+    }
+  }
 
-  Future<void> _submitPost() async {}
+  void _showImageSourceDialog() {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: const Text("Take a picture"),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text("Choose from galery"),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel),
+                title: const Text("Cancel"),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );       
+      },
+      );
+  }
+
+  Future<void> _submitPost() async {
+    if (_base64Image == null || _descriptionController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please add an image and description")),
+      );
+      return;
+    }
+    setState (() => _isUploading = true);
+    final now = DateTime.now().toIso8601String();
+    final uid = FirebaseAuth.instance.currentUser?.uid; // ambil waktu dari hp
+    if (uid == null) {
+      setState (() => _isUploading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("User not found. Please Sign In")),
+      );
+      return;
+    }
+    try {
+      await _getLocation(); 
+      final userDoc = await FirebaseFirestore.instance
+        .collection("users")
+        .doc(uid)
+        .get();
+      final fullName = userDoc.data()?["fullName"] ?? "Annonymus";
+      await FirebaseFirestore.instance.collection("post").add({
+        'image': _base64Image,
+        'description': _descriptionController.text,
+        'category': _aiCategory ?? "Tidak Diketahui",
+        'createAt': now,
+        'latitude': _latitude,
+        'longtitude': _longitude,
+        'fullName': fullName,
+        'userId': uid,
+      });
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Post uploaded successfully!")),
+      );
+    } catch (e) {
+      debugPrint("Upload failed: $e");
+      if (!mounted) return;
+      setState(() => _isUploading = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Failed to upload the post: $e")));
+    } finally {
+      if (mounted) {
+        setState(() => _isUploading = false);
+      }
+    }
+
+  }
+
 
   @override
   Widget build(BuildContext context) {
-    return const Placeholder();
+    return Scaffold(
+      appBar: AppBar(title: Text("Add Post")),
+      body:  SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            GestureDetector(
+              onTap: _showImageSourceDialog,
+              child: Container(),
+            ),
+            const SizedBox(height: 16),
+            // efek shimer saat generating
+            if (_isGeneratingAI)
+              Shimmer.fromColors(),
+            // Kategori dan tombol refresh
+            if (_aiCategory != null && !_isGeneratingAI)
+              Padding(),
+            // TextField untuk deskripsi
+            Offstage(),
+            const SizedBox(height: 24),
+            // tombol kirim post
+            ElevatedButton() ,           
+          ],
+        ),
+      ),
+    );
   }
 }
