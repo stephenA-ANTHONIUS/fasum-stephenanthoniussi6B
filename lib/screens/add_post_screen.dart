@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:http/http.dart' as http;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shimmer/shimmer.dart';
 
 class AddPostScreen extends StatefulWidget {
   const AddPostScreen({super.key});
@@ -90,7 +92,7 @@ class _AddPostScreenState extends State<AddPostScreen> {
           _descriptionController.clear();
         });
         await _compressAndEncodeImage();
-        await _generateDescriptionAI();
+        await _generateDescriptionWithAI();
       }
     } catch (e) {
       if (mounted) {
@@ -122,64 +124,82 @@ class _AddPostScreenState extends State<AddPostScreen> {
     }
   }
 
-  Future<void> _generateDescriptionAI() async {
+  Future<void> _generateDescriptionWithAI() async {
     if (_image == null) return;
     setState(() => _isGeneratingAI = true);
     try {
-      final model = GenerativeModel(
-        model: 'gemini-3-flash-preview:generateContent',
-        apiKey: 'AIzaSyCXbm8sCRTWm91zQBBXwkGvG-WMl2vD8nk',
-      );
       final imageBytes = await _image!.readAsBytes();
-      final content = Content.multi({
-        DataPart('image/jpeg', imageBytes),
-        TextPart(
-          'Berdasarkan foto ini, identifikasi satu kategori utama kerusakan fasilitas umum '
-          'dari daftar berikut: Jalan Rusak, Marka Pudar, Lampu Mati, Trotoar Rusak, '
-          'Rambu Rusak, Jembatan Rusak, Sampah Menumpuk, Saluran Tersumbat, Sungai Tercemar, '
-          'Sampah Sungai, Pohon Tumbang, Taman Rusak, Fasilitas Rusak, Pipa Bocor, '
-          'Vandalisme, Banjir, dan Lainnya. '
-          'Pilih kategori yang paling dominan atau paling mendesak untuk dilaporkan. '
-          'Buat deskripsi singkat untuk laporan perbaikan, dan tambahkan permohonan perbaikan. '
-          'Fokus pada kerusakan yang terlihat dan hindari spekulasi.\n\n'
-          'Format output yang diinginkan:\n'
-          'Kategori: [satu kategori yang dipilih]\n'
-          'Deskripsi: [deskripsi singkat]',
-        ),
+      final base64Image = base64Encode(imageBytes);
+      const apiKey = '[AIzaSyCb36c19FonqxP5SpwJ8fDvJ6HonFU7I90]'; // ganti dengan API key kamu
+      const url =
+          'https://generativelanguage.googleapis.com/v1/models/'
+          'gemini-2.0-flash:generateContent?key=$apiKey';
+      final body = jsonEncode({
+        "contents": [
+          {
+            "parts": [
+              {
+                "inlineData": {"mimeType": "image/jpeg", "data": base64Image},
+              },
+              {
+                "text":
+                    "Berdasarkan foto ini, identifikasi satu kategori utama kerusakan fasilitas umum "
+                    "dari daftar berikut: Jalan Rusak, Marka Pudar, Lampu Mati, Trotoar Rusak, "
+                    "Rambu Rusak, Jembatan Rusak, Sampah Menumpuk, Saluran Tersumbat, Sungai Tercemar, "
+                    "Sampah Sungai, Pohon Tumbang, Taman Rusak, Fasilitas Rusak, Pipa Bocor, "
+                    "Vandalisme, Banjir, dan Lainnya. "
+                    "Pilih kategori yang paling dominan atau paling mendesak untuk dilaporkan. "
+                    "Buat deskripsi singkat untuk laporan perbaikan, dan tambahkan permohonan perbaikan. "
+                    "Fokus pada kerusakan yang terlihat dan hindari spekulasi.\n\n"
+                    "Format output yang diinginkan:\n"
+                    "Kategori: [satu kategori yang dipilih]\n"
+                    "Deskripsi: [deskripsi singkat]",
+              },
+            ],
+          },
+        ],
       });
-      final response = await model.generateContent({content});
-      final aiText = response.text;
-      print('ai text: $aiText');
-      if (aiText != null && aiText.isNotEmpty) {
-        final lines = aiText.trim().split('\n');
-        String? category;
-        String? description;
-        for (var line in lines) {
-          final lower = line.toLowerCase();
-          if (lower.startsWith('kategori:')) {
-            category = line.substring(9).trim();
-          } else if (lower.startsWith('deskripsi:')) {
-            description = line.substring(10).trim();
-          } else if (lower.startsWith('keterangan:')) {
-            description = line.substring(11).trim();
+      final headers = {'Content-Type': 'application/json'};
+      final response = await http.post(
+        Uri.parse(url),
+        headers: headers,
+        body: body,
+      );
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        final text =
+            jsonResponse['candidates'][0]['content']['parts'][0]['text'];
+        print("AI TEXT: $text");
+        if (text != null && text.isNotEmpty) {
+          final lines = text.trim().split('\n');
+          String? category;
+          String? description;
+          for (var line in lines) {
+            final lower = line.toLowerCase();
+            if (lower.startsWith('kategori:')) {
+              category = line.substring(9).trim();
+            } else if (lower.startsWith('deskripsi:')) {
+              description = line.substring(10).trim();
+            } else if (lower.startsWith('keterangan:')) {
+              description = line.substring(11).trim();
+            }
           }
+          description ??= text.trim();
+          setState(() {
+            _aiCategory = category ?? 'Tidak diketahui';
+            _aiDescription = description!;
+            _descriptionController.text = _aiDescription!;
+          });
         }
-        description ??= aiText.trim();
-        setState(() {
-          _aiCategory = category ?? 'tidak diketahui';
-          _aiDescription = description;
-          _descriptionController.text = _aiDescription!;
-        });
+      } else {
+        debugPrint('Request failed: ${response.body}');
       }
     } catch (e) {
-      debugPrint('Error generating AI description: $e');
+      debugPrint('Failed to generate AI description: $e');
     } finally {
-      if (mounted) {
-        setState(() => _isGeneratingAI = false);
-      }
+      if (mounted) setState(() => _isGeneratingAI = false);
     }
   }
-
   Future<void> _getLocation() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -279,13 +299,13 @@ class _AddPostScreenState extends State<AddPostScreen> {
         .doc(uid)
         .get();
       final fullName = userDoc.data()?["fullName"] ?? "Annonymus";
-      await FirebaseFirestore.instance.collection("post").add({
+      await FirebaseFirestore.instance.collection("posts").add({
         'image': _base64Image,
         'description': _descriptionController.text,
         'category': _aiCategory ?? "Tidak Diketahui",
         'createAt': now,
         'latitude': _latitude,
-        'longtitude': _longitude,
+        'longitude': _longitude,
         'fullName': fullName,
         'userId': uid,
       });
@@ -321,20 +341,127 @@ class _AddPostScreenState extends State<AddPostScreen> {
           children: [
             GestureDetector(
               onTap: _showImageSourceDialog,
-              child: Container(),
+              child: Container(
+                height: 250,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius:  BorderRadius.circular(12),
+                ),
+                child: _image != null ?
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(
+                    _image!,
+                    height: 250,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                  ),
+                )
+                : const Center(
+                  child: Icon(
+                    Icons.add_a_photo,
+                    size: 50,
+                    color: Colors.grey,
+                  ),
+                )
+              ),
             ),
             const SizedBox(height: 16),
             // efek shimer saat generating
             if (_isGeneratingAI)
-              Shimmer.fromColors(),
+              Shimmer.fromColors(
+                baseColor: Colors.grey[300]!,
+                highlightColor: Colors.grey[100]!,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      height: 20,
+                      width: 100,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      margin: const EdgeInsets.only(bottom: 12),
+                    ),
+                    Container(
+                      height: 80,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             // Kategori dan tombol refresh
             if (_aiCategory != null && !_isGeneratingAI)
-              Padding(),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    GestureDetector(
+                      onTap: _showCategorySelection,
+                      child: Chip(
+                        label: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(_aiCategory!),
+                            const SizedBox(width: 6),
+                            const Icon(Icons.edit, size: 16),
+                          ],
+                        ),
+                        backgroundColor: Colors.blue[100],
+                      ),
+                    ),
+                    if (_image != null)
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      tooltip: "Generate another description",
+                      onPressed: _generateDescriptionWithAI,
+                    ),
+                  ],
+                ),
+              ),
             // TextField untuk deskripsi
-            Offstage(),
+            Offstage(
+              offstage: _isGeneratingAI,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  TextField(
+                    controller: _descriptionController,
+                    textCapitalization: TextCapitalization.sentences,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      hintText: "Add a brief Description",
+                      border: OutlineInputBorder()
+                    ),
+                  )
+                ],
+              ),
+            ),
             const SizedBox(height: 24),
             // tombol kirim post
-            ElevatedButton() ,           
+            ElevatedButton(
+              onPressed: _isUploading ? null : _submitPost,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                textStyle: const TextStyle(fontSize:  16),
+                backgroundColor: Colors.green
+              ),
+              child: _isUploading
+              ? const SizedBox(
+                height: 24,
+                width: 24,
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              )
+            : const Text("Post", style: TextStyle(color: Colors.white)),
+            ) ,           
           ],
         ),
       ),

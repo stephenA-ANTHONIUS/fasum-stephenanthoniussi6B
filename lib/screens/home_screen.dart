@@ -144,7 +144,7 @@ void _showCategoryFilter() async {
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
                     .collection('posts')
-                    .orderBy('createdAt', descending: true)
+                    .orderBy('createAt', descending: true)
                     .snapshots(),
                 builder: (context, snapshot) {
                   if (!snapshot.hasData) {
